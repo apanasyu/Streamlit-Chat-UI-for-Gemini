@@ -1,4 +1,5 @@
 # GUI ETL Chat
+<img width="3456" height="1698" alt="image" src="https://github.com/user-attachments/assets/622b28b3-5320-4a15-aa34-e79b3d5cee13" />
 
 `GUI_ETL_Chat.py` is a standalone Streamlit chat UI for Gemini that supports:
 
