@@ -52,10 +52,7 @@ IMAGE_OUTPUT_MODEL_RECOMMENDATIONS = [
     model_id for model_id in SUPPORTED_MODEL_IDS if model_id in IMAGE_OUTPUT_MODEL_IDS
 ]
 KNOWN_VERTEX_PROJECT_IDS = [
-    "afrl-il4-sbx-gemcode-l8dj",
-    "afrl-il4-sbx-documentp-lyk4",
-    "afrl-il4-sbx-agenticwo-1vvy",
-    "afrl-il4-sbx-gameplant-vqcq",
+"place project name here"
 ]
 CUSTOM_PROJECT_OPTION = "Custom project ID"
 DEFAULT_VERTEX_PROJECT_ID = KNOWN_VERTEX_PROJECT_IDS[0]
