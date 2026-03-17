@@ -51,6 +51,14 @@ IMAGE_OUTPUT_MODEL_IDS = {
 IMAGE_OUTPUT_MODEL_RECOMMENDATIONS = [
     model_id for model_id in SUPPORTED_MODEL_IDS if model_id in IMAGE_OUTPUT_MODEL_IDS
 ]
+KNOWN_VERTEX_PROJECT_IDS = [
+    "afrl-il4-sbx-gemcode-l8dj",
+    "afrl-il4-sbx-documentp-lyk4",
+    "afrl-il4-sbx-agenticwo-1vvy",
+    "afrl-il4-sbx-gameplant-vqcq",
+]
+CUSTOM_PROJECT_OPTION = "Custom project ID"
+DEFAULT_VERTEX_PROJECT_ID = KNOWN_VERTEX_PROJECT_IDS[0]
 DEFAULT_MODEL = (
     os.environ.get("GEMINI_CHAT_DEFAULT_MODEL", "").strip()
     if os.environ.get("GEMINI_CHAT_DEFAULT_MODEL", "").strip() in SUPPORTED_MODEL_IDS
@@ -78,6 +86,7 @@ COMMON_VERTEX_LOCATIONS = [
     ]
     if isinstance(value, str) and value.strip()
 ]
+DEFAULT_PROJECT_ID = DEFAULT_VERTEX_PROJECT_ID
 ETL_CHAT_TEMP_ROOT = etl_artifact_root() / "gui_etl_chat_temp"
 IMAGE_EDIT_PROMPT_TEMPLATE = """You are editing the provided BASE image in-place.
 
@@ -192,6 +201,48 @@ def _supported_extensions_label() -> str:
     return ", ".join(ordered)
 
 
+def _sync_project_selector_state() -> None:
+    current_choice = _clean_text(st.session_state.get("etl_chat_project_choice", ""))
+    if current_choice in KNOWN_VERTEX_PROJECT_IDS or current_choice == CUSTOM_PROJECT_OPTION:
+        return
+    current_project_id = _clean_text(st.session_state.get("etl_chat_project_id", DEFAULT_PROJECT_ID)) or DEFAULT_PROJECT_ID
+    if current_project_id in KNOWN_VERTEX_PROJECT_IDS:
+        st.session_state["etl_chat_project_choice"] = current_project_id
+    else:
+        st.session_state["etl_chat_project_choice"] = CUSTOM_PROJECT_OPTION
+        st.session_state["etl_chat_custom_project_id"] = current_project_id
+
+
+def _pending_model_override() -> Optional[Dict[str, Any]]:
+    payload = st.session_state.get("etl_chat_pending_model_override")
+    return payload if isinstance(payload, dict) else None
+
+
+def _set_pending_model_override(payload: Optional[Dict[str, Any]]) -> None:
+    st.session_state["etl_chat_pending_model_override"] = payload if isinstance(payload, dict) else None
+    if not payload:
+        st.session_state["etl_chat_execute_model_override_id"] = ""
+
+
+def _queue_model_override_execution(override_id: str) -> None:
+    st.session_state["etl_chat_execute_model_override_id"] = _clean_text(override_id)
+
+
+def _clear_model_override_execution_request() -> None:
+    st.session_state["etl_chat_execute_model_override_id"] = ""
+
+
+def _pop_messages_for_override(override_id: str) -> None:
+    target_id = _clean_text(override_id)
+    if not target_id:
+        return
+    st.session_state["etl_chat_messages"] = [
+        message
+        for message in list(st.session_state.get("etl_chat_messages") or [])
+        if _clean_text(message.get("override_id")) != target_id
+    ]
+
+
 def current_chat_config() -> Dict[str, str]:
     auth_mode = _clean_text(st.session_state.get("etl_chat_auth_mode", DEFAULT_AUTH_MODE))
     return {
@@ -254,7 +305,15 @@ def init_state() -> None:
     st.session_state.setdefault("etl_chat_messages", [])
     st.session_state.setdefault("etl_chat_auth_mode", DEFAULT_AUTH_MODE)
     st.session_state.setdefault("etl_chat_api_key", DEFAULT_API_KEY)
-    st.session_state.setdefault("etl_chat_project_id", _clean_text(LOCAL_GCP_PROJECT))
+    st.session_state.setdefault("etl_chat_project_id", DEFAULT_PROJECT_ID)
+    st.session_state.setdefault(
+        "etl_chat_project_choice",
+        DEFAULT_PROJECT_ID if DEFAULT_PROJECT_ID in KNOWN_VERTEX_PROJECT_IDS else CUSTOM_PROJECT_OPTION,
+    )
+    st.session_state.setdefault(
+        "etl_chat_custom_project_id",
+        "" if DEFAULT_PROJECT_ID in KNOWN_VERTEX_PROJECT_IDS else DEFAULT_PROJECT_ID,
+    )
     st.session_state.setdefault("etl_chat_location", DEFAULT_LOCATION)
     st.session_state.setdefault("etl_chat_model", DEFAULT_MODEL)
     if _clean_text(st.session_state.get("etl_chat_model", "")) not in SUPPORTED_MODEL_IDS:
@@ -270,6 +329,8 @@ def init_state() -> None:
     st.session_state.setdefault("etl_chat_thinking_budget", 1024)
     st.session_state.setdefault("etl_chat_uploader_nonce", 0)
     st.session_state.setdefault("etl_chat_session_id", uuid.uuid4().hex[:12])
+    st.session_state.setdefault("etl_chat_pending_model_override", None)
+    st.session_state.setdefault("etl_chat_execute_model_override_id", "")
     st.session_state.setdefault("etl_chat_active_config", current_chat_config())
     st.session_state.setdefault(
         "etl_chat_active_config_signature",
@@ -295,6 +356,8 @@ def clear_chat() -> None:
     cleanup_chat_temp_dir(str(st.session_state.get("etl_chat_session_id", "")))
     st.session_state["etl_chat_messages"] = []
     st.session_state["etl_chat_session_id"] = uuid.uuid4().hex[:12]
+    st.session_state["etl_chat_pending_model_override"] = None
+    st.session_state["etl_chat_execute_model_override_id"] = ""
     set_active_chat_config(current_chat_config())
     reset_composer()
 
@@ -831,7 +894,8 @@ def build_image_model_recommendation(model_name: str, request_mode: str) -> str:
     recommended = ", ".join(f"`{item}`" for item in IMAGE_OUTPUT_MODEL_RECOMMENDATIONS)
     return (
         f"The selected model `{model_name}` is not configured for {mode_label} output in this app. "
-        f"Switch to one of these image-capable models: {recommended}."
+        f"Switch to one of these image-capable models: {recommended}. "
+        "If this was a false positive, use the button below to proceed with the current model anyway."
     )
 
 
@@ -917,23 +981,37 @@ def extract_response_payload(response: Any) -> Tuple[str, str, List[Dict[str, An
     return answer_text, thought_text, generated_images
 
 
-def run_chat_turn(user_text: str, attachments: List[Dict[str, Any]]) -> Dict[str, Any]:
+def run_chat_turn(
+    user_text: str,
+    attachments: List[Dict[str, Any]],
+    *,
+    ignore_model_capability_check: bool = False,
+) -> Dict[str, Any]:
     auth_mode = str(st.session_state.get("etl_chat_auth_mode", DEFAULT_AUTH_MODE))
     model_name = _clean_text(st.session_state.get("etl_chat_model", DEFAULT_MODEL))
     if not model_name:
         raise ValueError("Enter a model name before sending a request.")
 
     working_attachments = list(attachments)
-    request_mode = infer_request_mode(user_text, working_attachments)
-    if request_mode in {"generate", "edit"} and model_name not in IMAGE_OUTPUT_MODEL_IDS:
+    inferred_request_mode = infer_request_mode(user_text, working_attachments)
+    request_mode = inferred_request_mode
+    if inferred_request_mode in {"generate", "edit"} and model_name not in IMAGE_OUTPUT_MODEL_IDS and not ignore_model_capability_check:
         return {
-            "answer_text": build_image_model_recommendation(model_name, request_mode),
+            "answer_text": build_image_model_recommendation(model_name, inferred_request_mode),
             "thought_text": "",
             "generated_images": [],
             "attachments_used": working_attachments,
-            "request_mode": request_mode,
+            "request_mode": inferred_request_mode,
             "local_only": True,
+            "allow_model_override": True,
         }
+
+    if ignore_model_capability_check and inferred_request_mode in {"generate", "edit"} and model_name not in IMAGE_OUTPUT_MODEL_IDS:
+        if inferred_request_mode == "edit" and not _image_attachments(working_attachments):
+            previous_image = _latest_generated_image_attachment()
+            if previous_image is not None:
+                working_attachments.append(previous_image)
+        request_mode = None
 
     if request_mode == "edit" and not _image_attachments(working_attachments):
         previous_image = _latest_generated_image_attachment()
@@ -947,6 +1025,7 @@ def run_chat_turn(user_text: str, attachments: List[Dict[str, Any]]) -> Dict[str
                 "attachments_used": working_attachments,
                 "request_mode": request_mode,
                 "local_only": True,
+                "allow_model_override": False,
             }
 
     client = build_client(
@@ -1034,11 +1113,26 @@ def render_sidebar() -> None:
             )
             st.caption("Project ID and location are not used in API key mode.")
         else:
-            st.text_input(
+            _sync_project_selector_state()
+            st.selectbox(
                 "Project ID",
-                key="etl_chat_project_id",
+                options=KNOWN_VERTEX_PROJECT_IDS + [CUSTOM_PROJECT_OPTION],
+                key="etl_chat_project_choice",
                 help="Uses Vertex AI authentication with your current Google credentials.",
             )
+            if st.session_state.get("etl_chat_project_choice") == CUSTOM_PROJECT_OPTION:
+                st.text_input(
+                    "Custom project ID",
+                    key="etl_chat_custom_project_id",
+                    placeholder=DEFAULT_VERTEX_PROJECT_ID,
+                )
+                st.session_state["etl_chat_project_id"] = (
+                    _clean_text(st.session_state.get("etl_chat_custom_project_id", "")) or DEFAULT_VERTEX_PROJECT_ID
+                )
+            else:
+                st.session_state["etl_chat_project_id"] = _clean_text(
+                    st.session_state.get("etl_chat_project_choice", DEFAULT_PROJECT_ID)
+                ) or DEFAULT_PROJECT_ID
             st.text_input("Location", key="etl_chat_location")
             st.caption("Default is `global`. Common choices: " + ", ".join(_unique_in_order(COMMON_VERTEX_LOCATIONS)))
 
@@ -1243,6 +1337,8 @@ def render_generated_images(message: Dict[str, Any]) -> None:
 
 def render_messages() -> None:
     messages = list(st.session_state.get("etl_chat_messages") or [])
+    pending_override = _pending_model_override()
+    pending_override_id = _clean_text((pending_override or {}).get("id"))
     if not messages:
         st.markdown(
             """
@@ -1272,6 +1368,15 @@ def render_messages() -> None:
                 render_message_attachments(message)
                 if role == "assistant":
                     render_generated_images(message)
+                    override_id = _clean_text(message.get("override_id"))
+                    if override_id and override_id == pending_override_id:
+                        st.info("This request was blocked by the model/task heuristic. You can still send it with the current model.")
+                        if st.button(
+                            "Proceed with current model anyway",
+                            key=f"etl_chat_override_{override_id}",
+                            width="stretch",
+                        ):
+                            _queue_model_override_execution(override_id)
                 if role == "assistant" and thoughts:
                     with st.expander("Thought trace", expanded=False):
                         st.markdown(thoughts)
@@ -1287,6 +1392,15 @@ def render_messages() -> None:
             render_message_attachments(message)
             if role == "assistant":
                 render_generated_images(message)
+                override_id = _clean_text(message.get("override_id"))
+                if override_id and override_id == pending_override_id:
+                    st.info("This request was blocked by the model/task heuristic. You can still send it with the current model.")
+                    if st.button(
+                        "Proceed with current model anyway",
+                        key=f"etl_chat_override_fallback_{override_id}",
+                        width="stretch",
+                    ):
+                        _queue_model_override_execution(override_id)
             if role == "assistant" and thoughts:
                 with st.expander("Thought trace", expanded=False):
                     st.markdown(thoughts)
@@ -1310,6 +1424,60 @@ def render_composer() -> Optional[str]:
     return render_message_fallback()
 
 
+def execute_pending_model_override() -> bool:
+    override_id = _clean_text(st.session_state.get("etl_chat_execute_model_override_id", ""))
+    pending_override = _pending_model_override()
+    if not override_id or not pending_override or _clean_text(pending_override.get("id")) != override_id:
+        _clear_model_override_execution_request()
+        return False
+
+    prompt_text = str(pending_override.get("prompt_text") or "")
+    attachments = list(pending_override.get("attachments") or [])
+    existing_messages = list(st.session_state.get("etl_chat_messages") or [])
+    _pop_messages_for_override(override_id)
+    _clear_model_override_execution_request()
+
+    with st.spinner("Sending request with the current model..."):
+        try:
+            turn_result = run_chat_turn(
+                prompt_text,
+                attachments,
+                ignore_model_capability_check=True,
+            )
+        except Exception as exc:
+            st.session_state["etl_chat_messages"] = existing_messages
+            st.error(str(exc))
+            return True
+
+    answer_text = _clean_text(turn_result.get("answer_text"))
+    thought_text = _clean_text(turn_result.get("thought_text"))
+    generated_images = list(turn_result.get("generated_images") or [])
+    attachments_used = list(turn_result.get("attachments_used") or [])
+    local_only = bool(turn_result.get("local_only"))
+
+    st.session_state["etl_chat_messages"] = list(st.session_state.get("etl_chat_messages") or []) + [
+        {
+            "role": "user",
+            "text": prompt_text,
+            "attachments": attachments_used,
+            "local_only": local_only,
+            "override_id": "",
+        },
+        {
+            "role": "assistant",
+            "text": answer_text or ("(Generated image output below.)" if generated_images else "(No visible text output returned.)"),
+            "thoughts": thought_text,
+            "attachments": [],
+            "generated_images": generated_images,
+            "local_only": local_only,
+            "override_id": "",
+        },
+    ]
+    _set_pending_model_override(None)
+    trigger_rerun()
+    return True
+
+
 def main() -> None:
     apply_chat_theme()
     init_state()
@@ -1317,6 +1485,9 @@ def main() -> None:
     render_header()
     render_messages()
     render_pending_attachments()
+
+    if execute_pending_model_override():
+        return
 
     prompt = render_composer()
     if prompt is None:
@@ -1351,12 +1522,27 @@ def main() -> None:
     thought_text = _clean_text(turn_result.get("thought_text"))
     generated_images = list(turn_result.get("generated_images") or [])
     attachments_used = list(turn_result.get("attachments_used") or [])
+    override_id = ""
+    local_only = bool(turn_result.get("local_only"))
+    if local_only and bool(turn_result.get("allow_model_override")):
+        override_id = uuid.uuid4().hex[:12]
+        _set_pending_model_override(
+            {
+                "id": override_id,
+                "prompt_text": prompt_text,
+                "attachments": attachments_used,
+            }
+        )
+    else:
+        _set_pending_model_override(None)
 
     st.session_state["etl_chat_messages"] = list(st.session_state.get("etl_chat_messages") or []) + [
         {
             "role": "user",
             "text": prompt_text,
             "attachments": attachments_used,
+            "local_only": local_only,
+            "override_id": override_id,
         },
         {
             "role": "assistant",
@@ -1364,6 +1550,8 @@ def main() -> None:
             "thoughts": thought_text,
             "attachments": [],
             "generated_images": generated_images,
+            "local_only": local_only,
+            "override_id": override_id,
         },
     ]
     reset_composer()
