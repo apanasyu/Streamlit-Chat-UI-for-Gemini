@@ -717,6 +717,25 @@ def _latest_generated_image_attachment() -> Optional[Dict[str, Any]]:
     return None
 
 
+def _prompt_references_existing_image(prompt: str) -> bool:
+    text = _clean_text(prompt).lower()
+    if not text:
+        return False
+    references = (
+        "previous image",
+        "prior image",
+        "last image",
+        "latest image",
+        "generated image",
+        "above image",
+        "image above",
+        "this image",
+        "that image",
+        "base image",
+    )
+    return any(reference in text for reference in references)
+
+
 def _prompt_requests_image_edit(prompt: str) -> bool:
     text = _clean_text(prompt).lower()
     if not text:
@@ -734,8 +753,26 @@ def _prompt_requests_image_edit(prompt: str) -> bool:
     ]
     if any(re.search(pattern, text) for pattern in direct_patterns):
         return True
-    if any(token in text for token in ("edit", "modify", "change", "replace", "remove", "add ", "restyle")):
-        return any(noun in text for noun in ("image", "photo", "picture", "background", "subject", "object"))
+    edit_tokens = (
+        "edit",
+        "modify",
+        "change",
+        "replace",
+        "remove",
+        "add ",
+        "restyle",
+        "place ",
+        "put ",
+        "move ",
+        "set ",
+        "turn ",
+        "swap ",
+    )
+    if any(token in text for token in edit_tokens):
+        if any(noun in text for noun in ("image", "photo", "picture", "background", "subject", "object", "scene")):
+            return True
+        if _prompt_references_existing_image(text):
+            return True
     return False
 
 
@@ -760,7 +797,23 @@ def infer_request_mode(prompt: str, attachments: List[Dict[str, Any]]) -> Option
         return "edit"
     if has_image_input and any(
         token in _clean_text(prompt).lower()
-        for token in ("edit", "modify", "change", "replace", "remove", "add ", "restyle", "make the")
+        for token in (
+            "edit",
+            "modify",
+            "change",
+            "replace",
+            "remove",
+            "add ",
+            "restyle",
+            "make the",
+            "make it",
+            "place ",
+            "put ",
+            "move ",
+            "set ",
+            "turn ",
+            "swap ",
+        )
     ):
         return "edit"
     if _prompt_requests_image_generation(prompt):
@@ -859,11 +912,6 @@ def extract_response_payload(response: Any) -> Tuple[str, str, List[Dict[str, An
             else:
                 text_parts.append(str(part_text))
 
-    if not text_parts:
-        raw_text = getattr(response, "text", None)
-        if raw_text:
-            text_parts.append(str(raw_text))
-
     answer_text = "\n\n".join(item.strip() for item in text_parts if str(item).strip()).strip()
     thought_text = "\n\n".join(item.strip() for item in thought_parts if str(item).strip()).strip()
     return answer_text, thought_text, generated_images
@@ -950,7 +998,7 @@ def run_chat_turn(user_text: str, attachments: List[Dict[str, Any]]) -> Dict[str
 def render_sidebar() -> None:
     with st.sidebar:
         st.header("Session")
-        if st.button("New chat", use_container_width=True):
+        if st.button("New chat", width="stretch"):
             clear_chat()
             trigger_rerun()
 
@@ -998,7 +1046,7 @@ def render_sidebar() -> None:
             st.warning("Model/project/auth settings changed. The next message will start a new chat.")
             st.caption("Current chat: " + describe_chat_config(active_chat_config()))
             st.caption("Next chat: " + describe_chat_config(current_chat_config()))
-            if st.button("Start new chat with selected settings", use_container_width=True):
+            if st.button("Start new chat with selected settings", width="stretch"):
                 clear_chat()
                 trigger_rerun()
 
@@ -1184,7 +1232,12 @@ def render_generated_images(message: Dict[str, Any]) -> None:
             st.warning(f"Generated image file is missing: {path}")
             continue
         caption = f"{path.name} • {_human_size(int(image_meta.get('size_bytes') or 0))}"
-        st.image(str(path), caption=caption, use_container_width=True)
+        try:
+            image_bytes = path.read_bytes()
+        except Exception as exc:
+            st.warning(f"Unable to read generated image: {path} ({exc})")
+            continue
+        st.image(image_bytes, caption=caption, width="stretch")
         st.caption(str(path))
 
 
@@ -1246,7 +1299,7 @@ def render_message_fallback() -> Optional[str]:
         height=100,
         placeholder="Ask a question about the attached files or continue the conversation.",
     )
-    if st.button("Send", use_container_width=True):
+    if st.button("Send", width="stretch"):
         return prompt_text
     return None
 
