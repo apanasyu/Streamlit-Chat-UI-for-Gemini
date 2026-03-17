@@ -59,6 +59,7 @@ KNOWN_VERTEX_PROJECT_IDS = [
 ]
 CUSTOM_PROJECT_OPTION = "Custom project ID"
 DEFAULT_VERTEX_PROJECT_ID = KNOWN_VERTEX_PROJECT_IDS[0]
+DEFAULT_MAX_OUTPUT_TOKENS = 65536
 DEFAULT_MODEL = (
     os.environ.get("GEMINI_CHAT_DEFAULT_MODEL", "").strip()
     if os.environ.get("GEMINI_CHAT_DEFAULT_MODEL", "").strip() in SUPPORTED_MODEL_IDS
@@ -320,7 +321,7 @@ def init_state() -> None:
         st.session_state["etl_chat_model"] = DEFAULT_MODEL
     st.session_state.setdefault("etl_chat_temperature", 0.2)
     st.session_state.setdefault("etl_chat_system_prompt", "")
-    st.session_state.setdefault("etl_chat_max_output_tokens", 4096)
+    st.session_state.setdefault("etl_chat_max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
     st.session_state.setdefault("etl_chat_top_p", 0.95)
     st.session_state.setdefault("etl_chat_top_k", 40)
     st.session_state.setdefault("etl_chat_seed", "")
@@ -494,9 +495,9 @@ def build_generation_config(
         temperature = 0.2
 
     try:
-        max_output_tokens = int(st.session_state.get("etl_chat_max_output_tokens", 4096))
+        max_output_tokens = int(st.session_state.get("etl_chat_max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS))
     except (TypeError, ValueError):
-        max_output_tokens = 4096
+        max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
 
     try:
         top_p = float(st.session_state.get("etl_chat_top_p", 0.95))
@@ -1154,7 +1155,7 @@ def render_sidebar() -> None:
             st.number_input(
                 "Max output tokens",
                 min_value=64,
-                max_value=32768,
+                max_value=DEFAULT_MAX_OUTPUT_TOKENS,
                 step=64,
                 key="etl_chat_max_output_tokens",
             )
