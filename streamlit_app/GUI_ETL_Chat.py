@@ -1,5 +1,6 @@
 import contextlib
 import html
+import inspect
 import mimetypes
 import os
 import re
@@ -158,6 +159,37 @@ def _extension_for_mime_type(mime_type: str) -> str:
         return ".gif"
     guessed = mimetypes.guess_extension(normalized, strict=False) if normalized else None
     return guessed or ".bin"
+
+
+def _streamlit_accepts_param(api_name: str, param_name: str) -> bool:
+    streamlit_api = getattr(st, api_name, None)
+    if streamlit_api is None:
+        return False
+    try:
+        return param_name in inspect.signature(streamlit_api).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _stretch_button(label: str, **kwargs: Any) -> bool:
+    if _streamlit_accepts_param("button", "width"):
+        return st.button(label, width="stretch", **kwargs)
+    if _streamlit_accepts_param("button", "use_container_width"):
+        return st.button(label, use_container_width=True, **kwargs)
+    return st.button(label, **kwargs)
+
+
+def _stretch_image(image: Any, **kwargs: Any) -> None:
+    if _streamlit_accepts_param("image", "width"):
+        st.image(image, width="stretch", **kwargs)
+        return
+    if _streamlit_accepts_param("image", "use_container_width"):
+        st.image(image, use_container_width=True, **kwargs)
+        return
+    if _streamlit_accepts_param("image", "use_column_width"):
+        st.image(image, use_column_width=True, **kwargs)
+        return
+    st.image(image, **kwargs)
 
 
 def _attachment_supported(name: str) -> bool:
@@ -1075,7 +1107,7 @@ def run_chat_turn(
 def render_sidebar() -> None:
     with st.sidebar:
         st.header("Session")
-        if st.button("New chat", width="stretch"):
+        if _stretch_button("New chat"):
             clear_chat()
             trigger_rerun()
 
@@ -1138,7 +1170,7 @@ def render_sidebar() -> None:
             st.warning("Model/project/auth settings changed. The next message will start a new chat.")
             st.caption("Current chat: " + describe_chat_config(active_chat_config()))
             st.caption("Next chat: " + describe_chat_config(current_chat_config()))
-            if st.button("Start new chat with selected settings", width="stretch"):
+            if _stretch_button("Start new chat with selected settings"):
                 clear_chat()
                 trigger_rerun()
 
@@ -1329,7 +1361,7 @@ def render_generated_images(message: Dict[str, Any]) -> None:
         except Exception as exc:
             st.warning(f"Unable to read generated image: {path} ({exc})")
             continue
-        st.image(image_bytes, caption=caption, width="stretch")
+        _stretch_image(image_bytes, caption=caption)
         st.caption(str(path))
 
 
@@ -1369,10 +1401,9 @@ def render_messages() -> None:
                     override_id = _clean_text(message.get("override_id"))
                     if override_id and override_id == pending_override_id:
                         st.info("This request was blocked by the model/task heuristic. You can still send it with the current model.")
-                        if st.button(
+                        if _stretch_button(
                             "Proceed with current model anyway",
                             key=f"etl_chat_override_{override_id}",
-                            width="stretch",
                         ):
                             _queue_model_override_execution(override_id)
                 if role == "assistant" and thoughts:
@@ -1393,10 +1424,9 @@ def render_messages() -> None:
                 override_id = _clean_text(message.get("override_id"))
                 if override_id and override_id == pending_override_id:
                     st.info("This request was blocked by the model/task heuristic. You can still send it with the current model.")
-                    if st.button(
+                    if _stretch_button(
                         "Proceed with current model anyway",
                         key=f"etl_chat_override_fallback_{override_id}",
-                        width="stretch",
                     ):
                         _queue_model_override_execution(override_id)
             if role == "assistant" and thoughts:
@@ -1411,7 +1441,7 @@ def render_message_fallback() -> Optional[str]:
         height=100,
         placeholder="Ask a question about the attached files or continue the conversation.",
     )
-    if st.button("Send", width="stretch"):
+    if _stretch_button("Send"):
         return prompt_text
     return None
 
