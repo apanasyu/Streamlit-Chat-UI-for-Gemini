@@ -52,7 +52,7 @@ IMAGE_OUTPUT_MODEL_RECOMMENDATIONS = [
     model_id for model_id in SUPPORTED_MODEL_IDS if model_id in IMAGE_OUTPUT_MODEL_IDS
 ]
 KNOWN_VERTEX_PROJECT_IDS = [
-"place project name here"
+"place GCP project identifier here"
 ]
 CUSTOM_PROJECT_OPTION = "Custom project ID"
 DEFAULT_VERTEX_PROJECT_ID = KNOWN_VERTEX_PROJECT_IDS[0]
